@@ -4,8 +4,8 @@ export interface EnvConfig {
   PORT: number;
   
   // Coinbase Developer Platform
-  CDP_API_KEY: string;
-  CDP_API_SECRET: string;
+  CDP_API_KEY_NAME: string;
+  CDP_PRIVATE_KEY: string;
   
   // EVVM MATE Protocol
   EVVM_APP_ID: string;

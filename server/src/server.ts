@@ -3,6 +3,7 @@ import cors from 'cors';
 import { config, validateConfig } from './config/env.config';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { requestLogger, corsOptions } from './middleware/logger.middleware';
+import { walletService } from './services/wallet.service';
 import apiRoutes from './routes';
 
 // Create Express app
@@ -18,6 +19,19 @@ try {
     process.exit(1);
   }
 }
+
+// Initialize Wallet Service
+(async () => {
+  try {
+    await walletService.initialize();
+    console.log('✅ Wallet service initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize wallet service:', error);
+    if (config.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+  }
+})();
 
 // Middleware
 app.use(cors(corsOptions));
@@ -55,9 +69,12 @@ app.listen(PORT, () => {
   console.log('🚀 ========================================');
   console.log('');
   console.log('📡 Available endpoints:');
-  console.log(`   GET  /              - Root`);
-  console.log(`   GET  /api/health    - Health check`);
-  console.log(`   GET  /api/info      - API info`);
+  console.log(`   GET  /                     - Root`);
+  console.log(`   GET  /api/health           - Health check`);
+  console.log(`   GET  /api/info             - API info`);
+  console.log(`   POST /api/wallet/create    - Create server wallet`);
+  console.log(`   GET  /api/wallet/:userId   - Get wallet info`);
+  console.log(`   POST /api/wallet/authorize - Authorize agent`);
   console.log('');
   console.log('⚡ Ready to accept connections...');
   console.log('');

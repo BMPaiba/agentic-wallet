@@ -1,7 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { ApiResponse } from '../types';
+import walletRoutes from './wallet.routes';
 
 const router = Router();
+
+// Mount wallet routes
+router.use('/wallet', walletRoutes);
 
 // Health check endpoint
 router.get('/health', (_req: Request, res: Response) => {

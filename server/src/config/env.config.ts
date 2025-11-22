@@ -10,8 +10,8 @@ export const config: EnvConfig = {
   PORT: parseInt(process.env.PORT || '3000', 10),
   
   // Coinbase Developer Platform
-  CDP_API_KEY: process.env.CDP_API_KEY || '',
-  CDP_API_SECRET: process.env.CDP_API_SECRET || '',
+  CDP_API_KEY_NAME: process.env.CDP_API_KEY_NAME || '',
+  CDP_PRIVATE_KEY: process.env.CDP_PRIVATE_KEY || '',
   
   // EVVM MATE Protocol
   EVVM_APP_ID: process.env.EVVM_APP_ID || '',
@@ -34,8 +34,8 @@ export const config: EnvConfig = {
 // Validate required variables in production
 export function validateConfig(): void {
   const requiredVars: (keyof EnvConfig)[] = [
-    'CDP_API_KEY',
-    'CDP_API_SECRET',
+    'CDP_API_KEY_NAME',
+    'CDP_PRIVATE_KEY',
     'EVVM_APP_ID',
     'FISHER_API_URL',
     'MATE_TREASURY_ADDRESS',
