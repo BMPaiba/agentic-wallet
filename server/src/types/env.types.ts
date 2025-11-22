@@ -6,6 +6,7 @@ export interface EnvConfig {
   // Coinbase Developer Platform
   CDP_API_KEY_NAME: string;
   CDP_PRIVATE_KEY: string;
+  CDP_WALLET_SECRET: string;
   
   // EVVM MATE Protocol
   EVVM_APP_ID: string;
@@ -20,6 +21,7 @@ export interface EnvConfig {
   
   // Database (future)
   DATABASE_URL?: string;
+  MONGODB_URI: string;
   
   // OpenAI (for agent)
   OPENAI_API_KEY?: string;

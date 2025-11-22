@@ -12,6 +12,7 @@ export const config: EnvConfig = {
   // Coinbase Developer Platform
   CDP_API_KEY_NAME: process.env.CDP_API_KEY_NAME || '',
   CDP_PRIVATE_KEY: process.env.CDP_PRIVATE_KEY || '',
+  CDP_WALLET_SECRET: process.env.CDP_WALLET_SECRET || '',
   
   // EVVM MATE Protocol
   EVVM_APP_ID: process.env.EVVM_APP_ID || '',
@@ -26,6 +27,7 @@ export const config: EnvConfig = {
   
   // Database
   DATABASE_URL: process.env.DATABASE_URL,
+  MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/agentic_wallet',
   
   // OpenAI
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -36,6 +38,7 @@ export function validateConfig(): void {
   const requiredVars: (keyof EnvConfig)[] = [
     'CDP_API_KEY_NAME',
     'CDP_PRIVATE_KEY',
+    'CDP_WALLET_SECRET',
     'EVVM_APP_ID',
     'FISHER_API_URL',
     'MATE_TREASURY_ADDRESS',

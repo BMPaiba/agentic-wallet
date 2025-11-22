@@ -4,6 +4,7 @@ import { config, validateConfig } from './config/env.config';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { requestLogger, corsOptions } from './middleware/logger.middleware';
 import { walletService } from './services/wallet.service';
+import { database } from './config/database';
 import apiRoutes from './routes';
 
 // Create Express app
@@ -20,13 +21,17 @@ try {
   }
 }
 
-// Initialize Wallet Service
+// Initialize services
 (async () => {
   try {
+    // Connect to MongoDB
+    await database.connect();
+    
+    // Initialize Wallet Service
     await walletService.initialize();
     console.log('✅ Wallet service initialized');
   } catch (error) {
-    console.error('❌ Failed to initialize wallet service:', error);
+    console.error('❌ Failed to initialize services:', error);
     if (config.NODE_ENV === 'production') {
       process.exit(1);
     }
@@ -70,7 +75,8 @@ app.listen(PORT, () => {
   console.log('');
   console.log('📡 Available endpoints:');
   console.log(`   GET  /                     - Root`);
-  console.log(`   GET  /api/health           - Health check`);
+  console.log(`   GET  /api/health           - Health check (with DB status)`);
+  console.log(`   GET  /api/db-check         - Database check`);
   console.log(`   GET  /api/info             - API info`);
   console.log(`   POST /api/wallet/create    - Create server wallet`);
   console.log(`   GET  /api/wallet/:userId   - Get wallet info`);
@@ -81,13 +87,15 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  await database.disconnect();
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('\nSIGINT received, shutting down gracefully...');
+  await database.disconnect();
   process.exit(0);
 });
 
