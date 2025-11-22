@@ -3,7 +3,6 @@ import { walletService } from '../services/wallet.service';
 import {
   CreateWalletRequest,
   CreateWalletResponse,
-  GetBalancesRequest,
   GetBalancesResponse,
   AuthorizeAgentRequest,
   AuthorizeAgentResponse,
@@ -77,9 +76,9 @@ export async function getWallet(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const serverWalletAddress = await walletService.getServerWalletAddress(userId);
+    const userWallet = await walletService.getUserWallet(userId);
 
-    if (!serverWalletAddress) {
+    if (!userWallet) {
       res.status(404).json({
         success: false,
         error: 'Wallet not found for this user',
@@ -89,13 +88,49 @@ export async function getWallet(req: Request, res: Response): Promise<void> {
 
     res.status(200).json({
       success: true,
-      data: {
-        userId,
-        serverWalletAddress,
-      },
+      data: userWallet,
     });
   } catch (error) {
     console.error('Error getting wallet:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get wallet',
+    });
+  }
+}
+
+/**
+ * GET /api/wallet/by-address/:address
+ * Get wallet information by embedded wallet address
+ */
+export async function getWalletByAddress(req: Request, res: Response): Promise<void> {
+  try {
+    const { address } = req.params;
+
+    if (!address) {
+      res.status(400).json({
+        success: false,
+        error: 'address is required',
+      });
+      return;
+    }
+
+    const userWallet = await walletService.getWalletByAddress(address);
+
+    if (!userWallet) {
+      res.status(404).json({
+        success: false,
+        error: 'Wallet not found for this address',
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: userWallet,
+    });
+  } catch (error) {
+    console.error('Error getting wallet by address:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get wallet',

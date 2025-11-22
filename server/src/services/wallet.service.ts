@@ -1,4 +1,5 @@
 import { Coinbase, Wallet } from '@coinbase/coinbase-sdk';
+import { createHash } from 'crypto';
 import { config } from '../config/env.config';
 import { UserWallet, WalletBalance } from '../types/wallet.types';
 
@@ -9,6 +10,8 @@ import { UserWallet, WalletBalance } from '../types/wallet.types';
 class WalletService {
   private coinbase: Coinbase | null = null;
   private wallets: Map<string, Wallet> = new Map(); // userId -> Wallet instance
+  private userWallets: Map<string, UserWallet> = new Map(); // userId -> UserWallet info
+  private addressToUserId: Map<string, string> = new Map(); // embeddedAddress -> userId
 
   /**
    * Initialize Coinbase SDK
@@ -43,6 +46,16 @@ class WalletService {
     }
 
     try {
+      // Check if wallet already exists for this embedded address
+      const existingByAddress = this.addressToUserId.get(userAddress.toLowerCase());
+      if (existingByAddress) {
+        const existingWallet = this.userWallets.get(existingByAddress);
+        if (existingWallet) {
+          console.log(`Server wallet already exists for address: ${userAddress}`);
+          return existingWallet;
+        }
+      }
+
       // Check if wallet already exists for this user
       if (this.wallets.has(userId)) {
         const existingWallet = this.wallets.get(userId)!;
@@ -73,7 +86,7 @@ class WalletService {
       // Store wallet in memory (in production, persist to DB)
       this.wallets.set(userId, wallet);
 
-      return {
+      const userWalletData: UserWallet = {
         userId,
         embeddedWalletAddress: userAddress,
         serverWalletAddress,
@@ -81,6 +94,12 @@ class WalletService {
         agentAuthorized: false,
         createdAt: new Date(),
       };
+
+      // Store user wallet info and address mapping
+      this.userWallets.set(userId, userWalletData);
+      this.addressToUserId.set(userAddress.toLowerCase(), userId);
+
+      return userWalletData;
     } catch (error) {
       console.error('Failed to create server wallet:', error);
       throw error;
@@ -97,7 +116,7 @@ class WalletService {
   /**
    * Get wallet balances
    */
-  async getBalances(walletAddress: string): Promise<WalletBalance[]> {
+  async getBalances(_walletAddress: string): Promise<WalletBalance[]> {
     if (!this.coinbase) {
       throw new Error('Coinbase SDK not initialized');
     }
@@ -155,6 +174,24 @@ class WalletService {
   }
 
   /**
+   * Get user wallet info by embedded wallet address
+   */
+  async getWalletByAddress(embeddedAddress: string): Promise<UserWallet | null> {
+    const userId = this.addressToUserId.get(embeddedAddress.toLowerCase());
+    if (!userId) {
+      return null;
+    }
+    return this.userWallets.get(userId) || null;
+  }
+
+  /**
+   * Get user wallet info by userId
+   */
+  async getUserWallet(userId: string): Promise<UserWallet | null> {
+    return this.userWallets.get(userId) || null;
+  }
+
+  /**
    * Sign a message with the server wallet
    */
   async signMessage(userId: string, message: string): Promise<string> {
@@ -163,8 +200,12 @@ class WalletService {
       throw new Error('Wallet not found');
     }
 
-    // Sign message using the wallet
-    const signature = await wallet.createPayloadSignature(message);
+    // Hash the message with keccak256 (Ethereum standard)
+    const messageHash = createHash('sha256').update(message).digest('hex');
+    const hexHash = `0x${messageHash}`;
+
+    // Sign the hash using the wallet
+    const signature = await wallet.createPayloadSignature(hexHash);
     return signature.getSignature() || '';
   }
 }
