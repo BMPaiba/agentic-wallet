@@ -1,37 +1,37 @@
-import { Coinbase, Wallet } from '@coinbase/coinbase-sdk';
+import { CdpClient } from '@coinbase/cdp-sdk';
 import { createHash } from 'crypto';
 import { config } from '../config/env.config';
+import { Wallet } from '../config/schemas';
 import { UserWallet, WalletBalance } from '../types/wallet.types';
 
 /**
  * Wallet Service
- * Manages Server Wallets (Agent Wallets) using Coinbase CDP SDK
+ * Manages Server Wallets (Agent Wallets) using Coinbase CDP SDK v2
  */
 class WalletService {
-  private coinbase: Coinbase | null = null;
-  private wallets: Map<string, Wallet> = new Map(); // userId -> Wallet instance
-  private userWallets: Map<string, UserWallet> = new Map(); // userId -> UserWallet info
-  private addressToUserId: Map<string, string> = new Map(); // embeddedAddress -> userId
+  private cdp: CdpClient | null = null;
+  private accounts: Map<string, any> = new Map(); // userId -> EVM Account
 
   /**
-   * Initialize Coinbase SDK
+   * Initialize Coinbase CDP Client
    */
   async initialize(): Promise<void> {
     try {
-      if (!config.CDP_API_KEY_NAME || !config.CDP_PRIVATE_KEY) {
+      if (!config.CDP_API_KEY_NAME || !config.CDP_PRIVATE_KEY || !config.CDP_WALLET_SECRET) {
         console.warn('⚠️  CDP credentials not configured - wallet service will run in mock mode');
         return;
       }
 
-      // Configure Coinbase SDK with CDP credentials
-      this.coinbase = new Coinbase({
-        apiKeyName: config.CDP_API_KEY_NAME,
-        privateKey: config.CDP_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      // Initialize CDP Client with correct parameter names
+      this.cdp = new CdpClient({
+        apiKeyId: config.CDP_API_KEY_NAME,
+        apiKeySecret: config.CDP_PRIVATE_KEY,
+        walletSecret: config.CDP_WALLET_SECRET,
       });
 
-      console.log('✅ Coinbase SDK initialized successfully');
+      console.log('✅ Coinbase CDP Client v2 initialized successfully');
     } catch (error) {
-      console.error('❌ Failed to initialize Coinbase SDK:', error);
+      console.error('❌ Failed to initialize Coinbase CDP Client:', error);
       throw error;
     }
   }
@@ -41,65 +41,57 @@ class WalletService {
    * This wallet will execute transactions on behalf of the user
    */
   async createServerWallet(userId: string, userAddress: string): Promise<UserWallet> {
-    if (!this.coinbase) {
-      throw new Error('Coinbase SDK not initialized');
+    if (!this.cdp) {
+      throw new Error('CDP Client not initialized');
     }
 
     try {
-      // Check if wallet already exists for this embedded address
-      const existingByAddress = this.addressToUserId.get(userAddress.toLowerCase());
-      if (existingByAddress) {
-        const existingWallet = this.userWallets.get(existingByAddress);
-        if (existingWallet) {
-          console.log(`Server wallet already exists for address: ${userAddress}`);
-          return existingWallet;
-        }
-      }
+      // Check if wallet already exists in MongoDB by embedded address
+      const existingWallet = await Wallet.findOne({ 
+        embeddedWalletAddress: userAddress.toLowerCase() 
+      });
 
-      // Check if wallet already exists for this user
-      if (this.wallets.has(userId)) {
-        const existingWallet = this.wallets.get(userId)!;
-        const defaultAddress = await existingWallet.getDefaultAddress();
-        
+      if (existingWallet) {
+        console.log(`Server wallet already exists for address: ${userAddress}`);
         return {
-          userId,
-          embeddedWalletAddress: userAddress,
-          serverWalletAddress: defaultAddress?.getId() || '',
-          serverWalletId: existingWallet.getId() || '',
-          agentAuthorized: false,
-          createdAt: new Date(),
+          userId: existingWallet.userId,
+          embeddedWalletAddress: existingWallet.embeddedWalletAddress,
+          serverWalletAddress: existingWallet.serverWalletAddress,
+          serverWalletId: existingWallet.serverWalletId,
+          agentAuthorized: existingWallet.agentAuthorized,
+          createdAt: existingWallet.createdAt,
         };
       }
 
-      // Create new wallet on Sepolia network
+      // Create new EVM account using CDP v2
       console.log(`Creating server wallet for user: ${userId}`);
-      const wallet = await Wallet.create({
-        networkId: Coinbase.networks.BaseSepolia, // Using Base Sepolia testnet
+      const account = await this.cdp.evm.createAccount();
+      
+      console.log(`✅ Server wallet created: ${account.address}`);
+
+      // Store account in memory for quick access
+      this.accounts.set(userId, account);
+
+      // Save to MongoDB
+      const walletDoc = new Wallet({
+        userId,
+        embeddedWalletAddress: userAddress.toLowerCase(),
+        serverWalletAddress: account.address.toLowerCase(),
+        serverWalletId: account.address, // CDP v2 uses address as ID
+        serverWalletData: JSON.stringify({ address: account.address }),
+        agentAuthorized: false,
       });
 
-      // Get the default address
-      const defaultAddress = await wallet.getDefaultAddress();
-      const serverWalletAddress = defaultAddress?.getId() || '';
+      await walletDoc.save();
 
-      console.log(`✅ Server wallet created: ${serverWalletAddress}`);
-
-      // Store wallet in memory (in production, persist to DB)
-      this.wallets.set(userId, wallet);
-
-      const userWalletData: UserWallet = {
-        userId,
-        embeddedWalletAddress: userAddress,
-        serverWalletAddress,
-        serverWalletId: wallet.getId() || '',
-        agentAuthorized: false,
-        createdAt: new Date(),
+      return {
+        userId: walletDoc.userId,
+        embeddedWalletAddress: walletDoc.embeddedWalletAddress,
+        serverWalletAddress: walletDoc.serverWalletAddress,
+        serverWalletId: walletDoc.serverWalletId,
+        agentAuthorized: walletDoc.agentAuthorized,
+        createdAt: walletDoc.createdAt,
       };
-
-      // Store user wallet info and address mapping
-      this.userWallets.set(userId, userWalletData);
-      this.addressToUserId.set(userAddress.toLowerCase(), userId);
-
-      return userWalletData;
     } catch (error) {
       console.error('Failed to create server wallet:', error);
       throw error;
@@ -107,28 +99,76 @@ class WalletService {
   }
 
   /**
-   * Get Server Wallet for a user
+   * Get user wallet info by embedded wallet address
    */
-  async getServerWallet(userId: string): Promise<Wallet | null> {
-    return this.wallets.get(userId) || null;
+  async getWalletByAddress(embeddedAddress: string): Promise<UserWallet | null> {
+    try {
+      const walletDoc = await Wallet.findOne({
+        embeddedWalletAddress: embeddedAddress.toLowerCase(),
+      });
+
+      if (!walletDoc) {
+        return null;
+      }
+
+      return {
+        userId: walletDoc.userId,
+        embeddedWalletAddress: walletDoc.embeddedWalletAddress,
+        serverWalletAddress: walletDoc.serverWalletAddress,
+        serverWalletId: walletDoc.serverWalletId,
+        agentAuthorized: walletDoc.agentAuthorized,
+        createdAt: walletDoc.createdAt,
+      };
+    } catch (error) {
+      console.error('Error getting wallet by address:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get user wallet info by userId
+   */
+  async getUserWallet(userId: string): Promise<UserWallet | null> {
+    try {
+      const walletDoc = await Wallet.findOne({ userId });
+
+      if (!walletDoc) {
+        return null;
+      }
+
+      return {
+        userId: walletDoc.userId,
+        embeddedWalletAddress: walletDoc.embeddedWalletAddress,
+        serverWalletAddress: walletDoc.serverWalletAddress,
+        serverWalletId: walletDoc.serverWalletId,
+        agentAuthorized: walletDoc.agentAuthorized,
+        createdAt: walletDoc.createdAt,
+      };
+    } catch (error) {
+      console.error('Error getting user wallet:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get server wallet address for a user
+   */
+  async getServerWalletAddress(userId: string): Promise<string | null> {
+    const wallet = await this.getUserWallet(userId);
+    return wallet?.serverWalletAddress || null;
   }
 
   /**
    * Get wallet balances
    */
   async getBalances(_walletAddress: string): Promise<WalletBalance[]> {
-    if (!this.coinbase) {
-      throw new Error('Coinbase SDK not initialized');
+    if (!this.cdp) {
+      throw new Error('CDP Client not initialized');
     }
 
     try {
-      // In a real implementation, you would query the blockchain
-      // For now, return mock data structure
+      // TODO: Implement actual balance fetching using CDP v2
       const balances: WalletBalance[] = [];
-
-      // TODO: Implement actual balance fetching using viem or ethers
-      // This would query ERC20 token contracts for balances
-
       return balances;
     } catch (error) {
       console.error('Failed to get balances:', error);
@@ -137,76 +177,30 @@ class WalletService {
   }
 
   /**
-   * Get server wallet address for a user
-   */
-  async getServerWalletAddress(userId: string): Promise<string | null> {
-    const wallet = this.wallets.get(userId);
-    if (!wallet) {
-      return null;
-    }
-
-    const defaultAddress = await wallet.getDefaultAddress();
-    return defaultAddress?.getId() || null;
-  }
-
-  /**
-   * Export wallet data (for persistence)
-   */
-  async exportWallet(userId: string): Promise<any> {
-    const wallet = this.wallets.get(userId);
-    if (!wallet) {
-      throw new Error('Wallet not found');
-    }
-
-    return await wallet.export();
-  }
-
-  /**
-   * Import wallet data (from persistence)
-   */
-  async importWallet(userId: string, walletData: any): Promise<void> {
-    if (!this.coinbase) {
-      throw new Error('Coinbase SDK not initialized');
-    }
-
-    const wallet = await Wallet.import(walletData);
-    this.wallets.set(userId, wallet);
-  }
-
-  /**
-   * Get user wallet info by embedded wallet address
-   */
-  async getWalletByAddress(embeddedAddress: string): Promise<UserWallet | null> {
-    const userId = this.addressToUserId.get(embeddedAddress.toLowerCase());
-    if (!userId) {
-      return null;
-    }
-    return this.userWallets.get(userId) || null;
-  }
-
-  /**
-   * Get user wallet info by userId
-   */
-  async getUserWallet(userId: string): Promise<UserWallet | null> {
-    return this.userWallets.get(userId) || null;
-  }
-
-  /**
    * Sign a message with the server wallet
    */
   async signMessage(userId: string, message: string): Promise<string> {
-    const wallet = this.wallets.get(userId);
-    if (!wallet) {
-      throw new Error('Wallet not found');
+    if (!this.cdp) {
+      throw new Error('CDP Client not initialized');
     }
 
-    // Hash the message with keccak256 (Ethereum standard)
-    const messageHash = createHash('sha256').update(message).digest('hex');
-    const hexHash = `0x${messageHash}`;
+    try {
+      const walletDoc = await Wallet.findOne({ userId });
+      if (!walletDoc) {
+        throw new Error('Wallet not found');
+      }
 
-    // Sign the hash using the wallet
-    const signature = await wallet.createPayloadSignature(hexHash);
-    return signature.getSignature() || '';
+      // Hash the message
+      const messageHash = createHash('sha256').update(message).digest('hex');
+      const hexHash = `0x${messageHash}`;
+
+      // TODO: Implement signing with CDP v2 SDK
+      // For now, return a placeholder
+      return hexHash;
+    } catch (error) {
+      console.error('Failed to sign message:', error);
+      throw error;
+    }
   }
 }
 

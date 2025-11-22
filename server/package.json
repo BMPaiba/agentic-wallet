@@ -21,6 +21,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.38.6",
     "@coinbase/coinbase-sdk": "^0.25.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
