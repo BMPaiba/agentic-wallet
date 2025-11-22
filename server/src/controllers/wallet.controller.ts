@@ -175,12 +175,11 @@ export async function getBalances(req: Request, res: Response): Promise<void> {
 
 /**
  * POST /api/wallet/authorize
- * Authorize the agent to execute transactions
- * (In production, this would verify the user's signature)
+ * Authorize the agent to execute transactions with optional limits
  */
 export async function authorizeAgent(req: Request, res: Response): Promise<void> {
   try {
-    const { userId, userAddress, signature } = req.body as AuthorizeAgentRequest;
+    const { userId, userAddress, signature, expiryHours, spendingLimitUSD } = req.body as AuthorizeAgentRequest;
 
     // Validate input
     if (!userId || !userAddress || !signature) {
@@ -193,14 +192,39 @@ export async function authorizeAgent(req: Request, res: Response): Promise<void>
 
     // TODO: Verify signature
     // In production, verify that the signature is valid and matches the user's address
-    // For now, we'll just acknowledge the authorization
 
-    console.log(`User ${userId} authorized agent for address ${userAddress}`);
+    // Calculate expiry date if provided
+    let expiryDate: Date | undefined;
+    if (expiryHours && expiryHours > 0) {
+      expiryDate = new Date();
+      expiryDate.setHours(expiryDate.getHours() + expiryHours);
+    }
+
+    // Update authorization in database
+    const result = await walletService.authorizeAgent(userId, {
+      authorized: true,
+      expiryDate,
+      spendingLimit: spendingLimitUSD,
+    });
+
+    if (!result) {
+      res.status(404).json({
+        success: false,
+        error: 'Wallet not found',
+      } as AuthorizeAgentResponse);
+      return;
+    }
+    
+    console.log(`✅ User ${userId} authorized agent for address ${userAddress}`);
+    if (expiryDate) console.log(`   Expires: ${expiryDate.toISOString()}`);
+    if (spendingLimitUSD) console.log(`   Spending limit: $${spendingLimitUSD}`);
 
     res.status(200).json({
       success: true,
       data: {
         authorized: true,
+        expiryDate: expiryDate?.toISOString(),
+        spendingLimit: spendingLimitUSD,
         timestamp: Date.now(),
       },
     } as AuthorizeAgentResponse);
@@ -244,6 +268,45 @@ export async function signMessage(req: Request, res: Response): Promise<void> {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to sign message',
+    });
+  }
+}
+
+/**
+ * DELETE /api/wallet/:userId
+ * Delete a server wallet (from DB and memory)
+ */
+export async function deleteWallet(req: Request, res: Response): Promise<void> {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      res.status(400).json({
+        success: false,
+        error: 'userId is required',
+      });
+      return;
+    }
+
+    const deleted = await walletService.deleteWallet(userId);
+
+    if (!deleted) {
+      res.status(404).json({
+        success: false,
+        error: 'Wallet not found',
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Wallet deleted successfully',
+    });
+  } catch (error) {
+    console.error('Error deleting wallet:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete wallet',
     });
   }
 }

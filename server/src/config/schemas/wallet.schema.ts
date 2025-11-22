@@ -9,7 +9,11 @@ export interface IWallet extends Document {
   serverWalletAddress: string;
   serverWalletId: string;
   serverWalletData: string; // JSON stringified wallet export
+  encryptedPrivateKey: string; // Encrypted private key for signing
   agentAuthorized: boolean;
+  agentAuthorizationExpiry?: Date; // Optional expiration date
+  agentSpendingLimit?: number; // Optional spending limit in USD
+  agentSpentAmount: number; // Track spent amount
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,9 +49,25 @@ const WalletSchema = new Schema<IWallet>(
       type: String,
       required: true,
     },
+    encryptedPrivateKey: {
+      type: String,
+      required: true,
+    },
     agentAuthorized: {
       type: Boolean,
       default: false,
+    },
+    agentAuthorizationExpiry: {
+      type: Date,
+      required: false,
+    },
+    agentSpendingLimit: {
+      type: Number,
+      required: false,
+    },
+    agentSpentAmount: {
+      type: Number,
+      default: 0,
     },
   },
   {

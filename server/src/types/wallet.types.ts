@@ -53,12 +53,16 @@ export interface AuthorizeAgentRequest {
   userId: string;
   userAddress: string;
   signature: string;       // User signature approving agent
+  expiryHours?: number;    // Optional: hours until authorization expires
+  spendingLimitUSD?: number; // Optional: maximum USD the agent can spend
 }
 
 export interface AuthorizeAgentResponse {
   success: boolean;
   data?: {
     authorized: boolean;
+    expiryDate?: string;   // ISO string
+    spendingLimit?: number;
     timestamp: number;
   };
   error?: string;

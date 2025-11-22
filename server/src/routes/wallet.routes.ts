@@ -6,6 +6,7 @@ import {
   getBalances,
   authorizeAgent,
   signMessage,
+  deleteWallet,
 } from '../controllers/wallet.controller';
 
 const router = Router();
@@ -31,5 +32,8 @@ router.post('/authorize', authorizeAgent);
 
 // POST /api/wallet/:userId/sign - Sign a message (for testing)
 router.post('/:userId/sign', signMessage);
+
+// DELETE /api/wallet/:userId - Delete wallet
+router.delete('/:userId', deleteWallet);
 
 export default router;

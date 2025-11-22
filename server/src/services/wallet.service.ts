@@ -1,5 +1,6 @@
 import { CdpClient } from '@coinbase/cdp-sdk';
-import { createHash } from 'crypto';
+import { Wallet as EthersWallet } from 'ethers';
+import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
 import { config } from '../config/env.config';
 import { Wallet } from '../config/schemas';
 import { UserWallet, WalletBalance } from '../types/wallet.types';
@@ -11,6 +12,37 @@ import { UserWallet, WalletBalance } from '../types/wallet.types';
 class WalletService {
   private cdp: CdpClient | null = null;
   private accounts: Map<string, any> = new Map(); // userId -> EVM Account
+  private encryptionKey: Buffer;
+
+  constructor() {
+    // Use CDP_WALLET_SECRET as encryption key (32 bytes for AES-256)
+    const hash = createHash('sha256').update(config.CDP_WALLET_SECRET || 'default-secret').digest();
+    this.encryptionKey = hash;
+  }
+
+  /**
+   * Encrypt private key for storage
+   */
+  private encryptPrivateKey(privateKey: string): string {
+    const iv = randomBytes(16);
+    const cipher = createCipheriv('aes-256-cbc', this.encryptionKey, iv);
+    let encrypted = cipher.update(privateKey, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return iv.toString('hex') + ':' + encrypted;
+  }
+
+  /**
+   * Decrypt private key from storage
+   */
+  private decryptPrivateKey(encryptedData: string): string {
+    const parts = encryptedData.split(':');
+    const iv = Buffer.from(parts[0], 'hex');
+    const encrypted = parts[1];
+    const decipher = createDecipheriv('aes-256-cbc', this.encryptionKey, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
 
   /**
    * Initialize Coinbase CDP Client
@@ -46,21 +78,15 @@ class WalletService {
     }
 
     try {
-      // Check if wallet already exists in MongoDB by embedded address
+      // Check if wallet already exists - if so, delete it to recreate
       const existingWallet = await Wallet.findOne({ 
         embeddedWalletAddress: userAddress.toLowerCase() 
       });
 
       if (existingWallet) {
-        console.log(`Server wallet already exists for address: ${userAddress}`);
-        return {
-          userId: existingWallet.userId,
-          embeddedWalletAddress: existingWallet.embeddedWalletAddress,
-          serverWalletAddress: existingWallet.serverWalletAddress,
-          serverWalletId: existingWallet.serverWalletId,
-          agentAuthorized: existingWallet.agentAuthorized,
-          createdAt: existingWallet.createdAt,
-        };
+        console.log(`🔄 Wallet exists for address: ${userAddress}, deleting old wallet...`);
+        await Wallet.deleteOne({ embeddedWalletAddress: userAddress.toLowerCase() });
+        this.accounts.delete(existingWallet.userId);
       }
 
       // Create new EVM account using CDP v2
@@ -68,18 +94,44 @@ class WalletService {
       const account = await this.cdp.evm.createAccount();
       
       console.log(`✅ Server wallet created: ${account.address}`);
+      console.log(`Account keys available:`, Object.keys(account));
 
-      // Store account in memory for quick access
+      // Try to access the private key from the account
+      // The CDP SDK uses viem's Account under the hood
+      let privateKey: string | null = null;
+      
+      // Check if account has a privateKey property or method
+      if ('privateKey' in account) {
+        privateKey = (account as any).privateKey;
+      } else if ('getPrivateKey' in account) {
+        privateKey = await (account as any).getPrivateKey();
+      }
+
+      if (!privateKey) {
+        console.warn('⚠️  Could not extract private key, wallet will only work in memory');
+      }
+
+      // Store account in memory for signing operations
       this.accounts.set(userId, account);
+
+      // Encrypt and store private key if available
+      const encryptedPrivateKey = privateKey 
+        ? this.encryptPrivateKey(privateKey)
+        : this.encryptPrivateKey(account.address); // Fallback to address
 
       // Save to MongoDB
       const walletDoc = new Wallet({
         userId,
         embeddedWalletAddress: userAddress.toLowerCase(),
         serverWalletAddress: account.address.toLowerCase(),
-        serverWalletId: account.address, // CDP v2 uses address as ID
-        serverWalletData: JSON.stringify({ address: account.address }),
+        serverWalletId: account.address,
+        serverWalletData: JSON.stringify({ 
+          address: account.address,
+          hasPrivateKey: !!privateKey 
+        }),
+        encryptedPrivateKey,
         agentAuthorized: false,
+        agentSpentAmount: 0,
       });
 
       await walletDoc.save();
@@ -180,25 +232,107 @@ class WalletService {
    * Sign a message with the server wallet
    */
   async signMessage(userId: string, message: string): Promise<string> {
-    if (!this.cdp) {
-      throw new Error('CDP Client not initialized');
-    }
-
     try {
       const walletDoc = await Wallet.findOne({ userId });
       if (!walletDoc) {
         throw new Error('Wallet not found');
       }
 
-      // Hash the message
-      const messageHash = createHash('sha256').update(message).digest('hex');
-      const hexHash = `0x${messageHash}`;
+      // Check if agent is authorized
+      if (!walletDoc.agentAuthorized) {
+        throw new Error('Agent not authorized for this wallet');
+      }
 
-      // TODO: Implement signing with CDP v2 SDK
-      // For now, return a placeholder
-      return hexHash;
+      // Check authorization expiry
+      if (walletDoc.agentAuthorizationExpiry && walletDoc.agentAuthorizationExpiry < new Date()) {
+        throw new Error('Agent authorization has expired');
+      }
+
+      // Try to get account from memory first
+      let account = this.accounts.get(userId);
+      
+      if (account) {
+        // Use CDP SDK account to sign
+        const signature = await account.signMessage({ message });
+        console.log(`✅ Message signed by wallet: ${walletDoc.serverWalletAddress}`);
+        return signature;
+      }
+
+      // If not in memory, try to use stored private key with ethers
+      try {
+        const privateKey = this.decryptPrivateKey(walletDoc.encryptedPrivateKey);
+        
+        // Validate it's a real private key (not just the address placeholder)
+        if (!privateKey.startsWith('0x') || privateKey.length < 64) {
+          throw new Error('Invalid private key stored');
+        }
+
+        const ethersWallet = new EthersWallet(privateKey);
+        const signature = await ethersWallet.signMessage(message);
+        
+        console.log(`✅ Message signed with stored key: ${walletDoc.serverWalletAddress}`);
+        return signature;
+      } catch (error) {
+        throw new Error('Account not available and no valid private key stored. Server may have been restarted.');
+      }
     } catch (error) {
       console.error('Failed to sign message:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Authorize agent with optional limits
+   */
+  async authorizeAgent(
+    userId: string,
+    options: {
+      authorized: boolean;
+      expiryDate?: Date;
+      spendingLimit?: number;
+    }
+  ): Promise<boolean> {
+    try {
+      const updateData: any = {
+        agentAuthorized: options.authorized,
+        agentSpentAmount: 0, // Reset spent amount when re-authorizing
+      };
+
+      if (options.expiryDate) {
+        updateData.agentAuthorizationExpiry = options.expiryDate;
+      }
+
+      if (options.spendingLimit) {
+        updateData.agentSpendingLimit = options.spendingLimit;
+      }
+
+      const result = await Wallet.updateOne({ userId }, { $set: updateData });
+
+      console.log(`📝 Authorization update for ${userId}: ${result.modifiedCount} document(s) modified`);
+
+      return result.modifiedCount > 0;
+    } catch (error) {
+      console.error('Failed to authorize agent:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete wallet from DB and memory
+   */
+  async deleteWallet(userId: string): Promise<boolean> {
+    try {
+      // Delete from MongoDB
+      const result = await Wallet.deleteOne({ userId });
+      
+      // Delete from memory
+      this.accounts.delete(userId);
+      
+      console.log(`🗑️  Wallet deleted for user: ${userId}`);
+      
+      return result.deletedCount > 0;
+    } catch (error) {
+      console.error('Failed to delete wallet:', error);
       throw error;
     }
   }
