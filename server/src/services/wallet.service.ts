@@ -16,7 +16,8 @@ class WalletService {
   async initialize(): Promise<void> {
     try {
       if (!config.CDP_API_KEY_NAME || !config.CDP_PRIVATE_KEY) {
-        throw new Error('CDP credentials not configured');
+        console.warn('⚠️  CDP credentials not configured - wallet service will run in mock mode');
+        return;
       }
 
       // Configure Coinbase SDK with CDP credentials
@@ -162,14 +163,9 @@ class WalletService {
       throw new Error('Wallet not found');
     }
 
-    // Get default address and sign
-    const defaultAddress = await wallet.getDefaultAddress();
-    if (!defaultAddress) {
-      throw new Error('No default address found');
-    }
-
-    const signature = await defaultAddress.signPayload(message);
-    return signature;
+    // Sign message using the wallet
+    const signature = await wallet.createPayloadSignature(message);
+    return signature.getSignature() || '';
   }
 }
 
